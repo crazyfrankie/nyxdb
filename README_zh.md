@@ -1,6 +1,6 @@
 # NyxDB
-NyxDB is a distributed key-value store database designed based on the LSM (Log-Structured Merge Tree) principle to provide efficient write performance and stable query response.
-NyxDB adopts a distributed architecture and can scale horizontally to meet the needs of large-scale applications, suitable for scenarios that require fast writes and large-scale data storage.
+NyxDB 是一个基于 LSM（Log-Structured Merge Tree）原理设计的分布式键值存储数据库，旨在提供高效的写入性能和稳定的查询响应。
+NyxDB 能够横向扩展以满足大规模应用的需求，适用于需要快速写入和大规模数据存储的场景。
 
 ## 名字来源
 Nyx（纽克斯）是希腊神话中的夜神，象征着神秘和深邃。我们选择这个名字，是因为 NyxDB 专注于为用户提供一个 稳定、高效、可扩展的存储引擎，就像夜晚的深邃与宁静一样，它在后台默默地保障着数据的安全与可靠，确保系统在高负载情况下依旧能够保持高效运转。
