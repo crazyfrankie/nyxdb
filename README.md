@@ -1,6 +1,6 @@
 # NyxDB
 
-English |  [简体中文](./README.zh.md)  <!-- 中文版本链接 -->
+English |  [简体中文](./README_zh.md)  <!-- 中文版本链接 -->
 
 **NyxDB** is a distributed key-value store database built on the principles of the **LSM** (Log-Structured Merge Tree). It aims to provide high write performance and stable query responses. NyxDB uses a distributed architecture, capable of scaling horizontally to meet the needs of large-scale applications. It is suitable for scenarios that require fast writes and large data storage.
 
