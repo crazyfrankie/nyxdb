@@ -103,3 +103,13 @@ func (a *Arena) getVal(offset, size uint32) (res kv.Value) {
 	res.Decode(a.buf[offset : offset+size])
 	return
 }
+
+// getNodeOffset returns the offset of node in the arena. If the node pointer is
+// nil, then the zero offset is returned.
+func (a *Arena) getNodeOffset(n *node) uint32 {
+	if n == nil {
+		return 0
+	}
+
+	return uint32(uintptr(unsafe.Pointer(n)) - uintptr(unsafe.Pointer(&a.buf[0])))
+}

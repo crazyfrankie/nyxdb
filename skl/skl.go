@@ -1,6 +1,7 @@
 package skl
 
 import (
+	"log"
 	"math/rand"
 	"sync/atomic"
 	"unsafe"
@@ -193,10 +194,96 @@ func (s *SkipList) Get(key []byte) kv.Value {
 	return vs
 }
 
-// Put inserts the key-value pair.
-// TODO
-func (s *SkipList) Put(key []byte, val kv.Value) {
+// findSpliceForLevel Finds the insertion position in the given hierarchical level
+func (s *SkipList) findSpliceForLevel(key []byte, before *node, level int) (*node, *node) {
+	for {
+		// assume before.key < key
+		next := s.getNext(before, level)
+		if next == nil {
+			return before, next
+		}
+		nextKey := next.key(s.arena)
+		cmp := util.CompareKeys(key, nextKey)
+		if cmp == 0 {
+			// Equal case
+			// just update val
+			return next, next
+		}
+		if cmp < 0 {
+			// before.key < key < next.key. We are done for this level.
+			// insert between before and next
+			return before, next
+		}
+		// continue find
+		before = next
+	}
+}
 
+// Put inserts the key-value pair.
+func (s *SkipList) Put(key []byte, val kv.Value) {
+	currHeight := s.getHeight()
+	var prev [maxHeight + 1]*node
+	var next [maxHeight + 1]*node
+	prev[currHeight] = s.head
+	next[currHeight] = nil
+
+	for i := int(currHeight) - 1; i >= 0; i-- {
+		prev[i], next[i] = s.findSpliceForLevel(key, prev[i+1], i)
+		if prev[i] == next[i] {
+			prev[i].setValue(s.arena, val)
+			return
+		}
+	}
+
+	height := s.RandomLevel()
+	newNode := newNode(s.arena, key, val, height)
+
+	// Try to increase height through CAS
+	currHeight = s.getHeight()
+	for height > int(currHeight) {
+		if s.height.CompareAndSwap(currHeight, int32(height)) {
+			// Successfully increased SkipList.height.
+			break
+		}
+		currHeight = s.getHeight()
+	}
+
+	// Add nodes from the base level
+	for i := 0; i < height; i++ {
+		for {
+			if prev[i] == nil {
+				if i <= 1 {
+					log.Fatalf("Invalid level: %d. This cannot happen in base level.", i)
+				}
+				// We haven't computed prev, next for this level because height exceeds old currHeight.
+				// For these levels, we expect the lists to be sparse, so we can just search from head.
+				prev[i], next[i] = s.findSpliceForLevel(key, s.head, i)
+				// Someone adds the exact same key before we are able to do so.
+				// This can only happen on the base level. But we know we are not on the base level.
+				// This doesn't usually happen, but if prev[i] == next[i],
+				// there's a problem with the jump table structure (e.g. multiple threads inserting the same key at the same time).
+				if prev[i] == next[i] {
+					log.Fatalf("prev[i] and next[i] are equal at level %d, which should never happen.", i)
+				}
+			}
+			nextOffset := s.arena.getNodeOffset(next[i])
+			newNode.next[i].Store(nextOffset)
+			if prev[i].next[i].CompareAndSwap(nextOffset, s.arena.getNodeOffset(newNode)) {
+				// Managed to insert newNode between prev[i] and next[i]. Go to the next level.
+				break
+			}
+			// CAS failed, another thread modified prev[i].next[i], need to find it again.
+			// Recalculate prev[i] and next[i], but this time continue from prev[i] instead of head
+			prev[i], next[i] = s.findSpliceForLevel(key, prev[i], i)
+			if prev[i] == next[i] {
+				if i != 0 {
+					log.Fatalf("Equality can happen only on base level, but found on level %d.", i)
+				}
+				prev[i].setValue(s.arena, val)
+				return
+			}
+		}
+	}
 }
 
 // RandomLevel generates a random number of levels
