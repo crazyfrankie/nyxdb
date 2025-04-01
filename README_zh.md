@@ -68,15 +68,15 @@ NyxDB 支持基本的配置文件设置，你可以通过修改配置文件来�
 
 ```yaml
 server:
-port: 8080
-cluster: true
-nodes:
-- 192.168.1.1:6379
-- 192.168.1.2:6379
+  port: 8080
+  cluster: true
+  nodes:
+    - 192.168.1.1:9921
+    - 192.168.1.2:9921
 
 storage:
-compaction_interval: 3600
-memtable_size: 64MB
+  compaction_interval: 3600
+  memtable_size: 64MB
 ```
 
 ## 数据持久化

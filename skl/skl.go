@@ -1,128 +1,209 @@
 package skl
 
-import "math/rand"
+import (
+	"math/rand"
+	"sync/atomic"
+	"unsafe"
+
+	"github.com/crazyfrankie/nyxdb/internal/kv"
+	"github.com/crazyfrankie/nyxdb/internal/util"
+)
 
 const (
 	maxHeight = 20
+
+	// MaxNodeSize is the memory footprint of a node of maximum height.
+	MaxNodeSize = int(unsafe.Sizeof(node{}))
 )
 
-type Node struct {
-	value int
-	next  []*Node
+type node struct {
+	// val is divided into parts in an Uint64 unit to facilitate atomic operations
+	// offset is:
+	// value offset (bits 0-31)
+	// value size (bits 32-63)
+	value atomic.Uint64
+
+	keyOffset uint32
+	keySize   uint16
+
+	// height of the next
+	height uint16
+
+	// The next array represents the next element a node points to at each level.
+	// Since most nodes don't need a full height in the next array.
+	// since the probability of each layer decreases exponentially.
+	// Therefore, these nodes are truncated during allocation to avoid containing unneeded next elements
+	next [maxHeight]atomic.Uint32
 }
 
 type SkipList struct {
-	head  *Node
-	level int
+	head   *node
+	height atomic.Int32
+	arena  *Arena
 }
 
-func newNode(val int, level int) *Node {
-	return &Node{
-		value: val,
-		next:  make([]*Node, level),
-	}
+func encodeValue(valueOffset uint32, valueSize uint32) uint64 {
+	return uint64(valueSize)<<32 | uint64(valueOffset)
 }
 
-func NewSkipList() *SkipList {
-	return &SkipList{
-		head:  newNode(0, maxHeight),
-		level: 1,
-	}
+func decodeValue(value uint64) (valOffset uint32, valSize uint32) {
+	valOffset = uint32(value)
+	valSize = uint32(value >> 32)
+	return
 }
 
-// Insert 向跳表插入一个值
-func (sl *SkipList) Insert(value int) {
-	update := make([]*Node, maxHeight)
-	current := sl.head
+func newNode(a *Arena, key []byte, val kv.Value, height int) *node {
+	// The base level is already allocated in the node struct.
+	offset := a.putNode(height)
+	n := a.getNode(offset)
+	n.keyOffset = a.putKey(key)
+	n.keySize = uint16(len(key))
+	n.height = uint16(height)
+	n.value.Store(encodeValue(a.putVal(val), val.EncodedSize()))
+	return n
+}
 
-	// 从最高层开始查找插入位置
-	for i := sl.level - 1; i >= 0; i-- {
-		for current.next[i] != nil && current.next[i].value < value {
-			current = current.next[i]
+func NewSkipList(arenaSize int64) *SkipList {
+	arena := newArena(arenaSize)
+	head := newNode(arena, nil, kv.Value{}, maxHeight)
+	skl := &SkipList{head: head, arena: arena}
+	skl.height.Store(1)
+
+	return skl
+}
+
+// getValue returns valueOffset and valSize
+func (n *node) getValue() (uint32, uint32) {
+	value := n.value.Load()
+	return decodeValue(value)
+}
+
+// setValue stores the given val in the node and arena.
+func (n *node) setValue(a *Arena, val kv.Value) {
+	valueOffset := a.putVal(val)
+	value := encodeValue(valueOffset, val.EncodedSize())
+	n.value.Store(value)
+}
+
+// getNextOffset returns the offset of the node with the given height in the next array.
+func (n *node) getNextOffset(height int) uint32 {
+	return n.next[height].Load()
+}
+
+// key returns the key for the node from the arena.
+func (n *node) key(a *Arena) []byte {
+	return a.getKey(n.keyOffset, n.keySize)
+}
+
+// getHeight returns the current height of the SkipList.
+func (s *SkipList) getHeight() int32 {
+	return s.height.Load()
+}
+
+// getNext returns the node with the corresponding height in the next array for a given node.
+func (s *SkipList) getNext(n *node, height int) *node {
+	return s.arena.getNode(n.getNextOffset(height))
+}
+
+// findNear finds the node near to key.
+// If less=true, it finds rightmost node such that node.key < key (if allowEqual=false) or node.key <= key (if allowEqual=true).
+// If less=false, it finds leftmost node such that node.key > key (if allowEqual=false) or node.key >= key (if allowEqual=true).
+// Returns the node found. The bool returned is true if the node has key equal to given key.
+func (s *SkipList) findNear(key []byte, less bool, allowEqual bool) (*node, bool) {
+	curr := s.head
+	level := int(s.getHeight() - 1)
+	for {
+		// Assume curr.key < key.
+		next := s.getNext(curr, level)
+		if next == nil {
+			// curr.key < key < END OF LIST
+			if level > 0 {
+				level--
+				continue
+			}
+			// Level=0. Cannot descend further. At this point we continue to look for.
+			if !less {
+				return nil, false
+			}
+			if curr == s.head {
+				return nil, false
+			}
+			return curr, false
 		}
-		update[i] = current
-	}
 
-	// 如果下层的节点值等于要插入的值，直接返回
-	current = current.next[0]
-	if current != nil && current.value == value {
-		return
-	}
-
-	// 随机决定新节点的层数
-	level := sl.RandomLevel()
-
-	// 如果新节点的层数大于当前跳表的层数，更新跳表的层数
-	if level > sl.level {
-		for i := sl.level; i < level; i++ {
-			update[i] = sl.head
+		nextKey := next.key(s.arena)
+		cmp := util.CompareKeys(key, nextKey)
+		if cmp > 0 {
+			// curr.key < next.key < key. We can continue to move right.
+			curr = next
+			continue
 		}
-		sl.level = level
-	}
-
-	// 创建新节点
-	newNode := newNode(value, level)
-
-	// 更新新节点的指针
-	for i := 0; i < level; i++ {
-		newNode.next[i] = update[i].next[i]
-		update[i].next[i] = newNode
+		if cmp == 0 {
+			// curr.key < key == next.key.
+			if allowEqual {
+				return next, true
+			}
+			if !less {
+				// We want >, so go to base level to grab the next bigger note.
+				return s.getNext(next, 0), false
+			}
+			// We want <. If not base level, we should go closer in the next level.
+			if level > 0 {
+				level--
+				continue
+			}
+			// On base level. Return curr.
+			if curr == s.head {
+				return nil, false
+			}
+			return curr, false
+		}
+		// cmp < 0. In other words, curr.key < key < next.key
+		if level > 0 {
+			level--
+			continue
+		}
+		if !less {
+			return next, false
+		}
+		if curr == s.head {
+			return nil, false
+		}
+		return curr, false
 	}
 }
 
-// RandomLevel 随机生成一个层数
-func (sl *SkipList) RandomLevel() int {
+// Get gets the value associated with the key.
+// It returns a valid value if it finds equal or earlier version of the same key.
+func (s *SkipList) Get(key []byte) kv.Value {
+	n, _ := s.findNear(key, false, true) // findGreaterOrEqual
+	if n == nil {
+		return kv.Value{}
+	}
+
+	nextKey := s.arena.getKey(n.keyOffset, n.keySize)
+	if !util.SameKey(key, nextKey) {
+		return kv.Value{}
+	}
+
+	valOffset, valSize := n.getValue()
+	vs := s.arena.getVal(valOffset, valSize)
+	vs.Version = util.ParseTs(key)
+
+	return vs
+}
+
+// Put inserts the key-value pair.
+// TODO
+func (s *SkipList) Put(key []byte, val kv.Value) {
+
+}
+
+// RandomLevel generates a random number of levels
+func (s *SkipList) RandomLevel() int {
 	level := 1
 	for rand.Float32() < 0.5 && level < maxHeight {
 		level++
 	}
 	return level
-}
-
-// Search 查找跳表中的值
-func (sl *SkipList) Search(value int) *Node {
-	current := sl.head
-	for i := sl.level - 1; i >= 0; i-- {
-		for current.next[i] != nil && current.next[i].value < value {
-			current = current.next[i]
-		}
-	}
-
-	// 查找最底层的节点
-	current = current.next[0]
-	if current != nil && current.value == value {
-		return current
-	}
-	return nil
-}
-
-// Delete 删除跳表中的值
-func (sl *SkipList) Delete(value int) {
-	update := make([]*Node, maxHeight)
-	current := sl.head
-
-	// 从最高层开始查找删除位置
-	for i := sl.level - 1; i >= 0; i-- {
-		for current.next[i] != nil && current.next[i].value < value {
-			current = current.next[i]
-		}
-		update[i] = current
-	}
-
-	// 查找最底层的节点
-	current = current.next[0]
-	if current != nil && current.value == value {
-		// 更新各层的指针
-		for i := 0; i < sl.level; i++ {
-			if update[i].next[i] != current {
-				break
-			}
-			update[i].next[i] = current.next[i]
-		}
-
-		// 可能需要更新跳表的层数
-		for sl.level > 1 && sl.head.next[sl.level-1] == nil {
-			sl.level--
-		}
-	}
 }
