@@ -40,7 +40,28 @@ type node struct {
 type SkipList struct {
 	head   *node
 	height atomic.Int32
+	ref    atomic.Int32
 	arena  *Arena
+}
+
+// IncrRef increases the refcount
+func (s *SkipList) IncrRef() {
+	s.ref.Add(1)
+}
+
+// DecrRef decrements the refcount, deallocating the SkipList when done using it
+func (s *SkipList) DecrRef() {
+	newRef := s.ref.Add(-1)
+	if newRef > 0 {
+		return
+	}
+
+	// Indicate we are closed. Good for testing.  Also, lets GC reclaim memory. Race condition
+	// here would suggest we are accessing SkipList when we are supposed to have no reference!
+	s.arena = nil
+	// Since the head references the arena's buf, as long as the head is kept around
+	// GC can't release the buf.
+	s.head = nil
 }
 
 func encodeValue(valueOffset uint32, valueSize uint32) uint64 {
@@ -69,7 +90,7 @@ func NewSkipList(arenaSize int64) *SkipList {
 	head := newNode(arena, nil, kv.Value{}, maxHeight)
 	skl := &SkipList{head: head, arena: arena}
 	skl.height.Store(1)
-
+	skl.ref.Add(1)
 	return skl
 }
 
@@ -293,4 +314,60 @@ func (s *SkipList) RandomLevel() int {
 		level++
 	}
 	return level
+}
+
+// NewIterator returns a SkipList iterator. You must close the iterator.
+func (s *SkipList) NewIterator() *Iterator {
+	s.IncrRef()
+	return &Iterator{list: s}
+}
+
+type Iterator struct {
+	list *SkipList
+	n    *node
+}
+
+func (i *Iterator) Close() error {
+	i.list.DecrRef()
+	return nil
+}
+
+type UniIterator struct {
+	iter     *Iterator
+	reversed bool
+}
+
+func (u UniIterator) Next() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (u UniIterator) Rewind() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (u UniIterator) Seek(key []byte) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (u UniIterator) Key() []byte {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (u UniIterator) Value() kv.Value {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (u UniIterator) Valid() bool {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (u UniIterator) Close() error {
+	//TODO implement me
+	panic("implement me")
 }

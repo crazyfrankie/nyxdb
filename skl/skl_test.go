@@ -2,6 +2,7 @@ package skl
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -14,6 +15,17 @@ const arenaSize = 1 << 20
 
 func newValue(v int) []byte {
 	return []byte(fmt.Sprintf("%05d", v))
+}
+
+// length iterates over skiplist to give exact size.
+func length(s *SkipList) int {
+	x := s.getNext(s.head, 0)
+	count := 0
+	for x != nil {
+		count++
+		x = s.getNext(x, 0)
+	}
+	return count
 }
 
 func TestBasicWay(t *testing.T) {
@@ -57,4 +69,34 @@ func TestBasicWay(t *testing.T) {
 	require.NotNil(t, v.Value)
 	require.EqualValues(t, val5, v.Value)
 	require.EqualValues(t, 60, v.Meta)
+}
+
+func TestConcurrentBasic(t *testing.T) {
+	const n = 1000
+	l := NewSkipList(arenaSize)
+	var wg sync.WaitGroup
+	key := func(i int) []byte {
+		return util.KeyWithTs([]byte(fmt.Sprintf("%05d", i)), 0)
+	}
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			l.Put(key(i),
+				kv.Value{Value: newValue(i), Meta: 0, UserMeta: 0})
+		}(i)
+	}
+	wg.Wait()
+	// Check values. Concurrent reads.
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			v := l.Get(key(i))
+			require.True(t, v.Value != nil)
+			require.EqualValues(t, newValue(i), v.Value)
+		}(i)
+	}
+	wg.Wait()
+	require.EqualValues(t, n, length(l))
 }

@@ -26,7 +26,7 @@ English |  [简体中文](./README_zh.md)  <!-- 中文版本链接 -->
 You can install NyxDB using the following command:
 
 ```bash
-go get github.com/yourusername/NyxDB
+go get github.com/crazyfrankie/NyxDB
 ```
 
 ## Example
