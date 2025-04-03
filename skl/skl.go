@@ -195,6 +195,26 @@ func (s *SkipList) findNear(key []byte, less bool, allowEqual bool) (*node, bool
 	}
 }
 
+// findLast is used to locate the last node of the current SkipList
+func (s *SkipList) findLast() *node {
+	curr := s.head
+	level := int(s.getHeight()) - 1
+	for {
+		next := s.getNext(curr, level)
+		if next != nil {
+			curr = next
+			continue
+		}
+		if level == 0 {
+			if curr == s.head {
+				return nil
+			}
+			return curr
+		}
+		level--
+	}
+}
+
 // Get gets the value associated with the key.
 // It returns a valid value if it finds equal or earlier version of the same key.
 func (s *SkipList) Get(key []byte) kv.Value {
@@ -316,12 +336,18 @@ func (s *SkipList) RandomLevel() int {
 	return level
 }
 
+// MemorySize returns the size of the SkipList in terms of how much memory is used within its internal arena.
+func (s *SkipList) MemorySize() int64 {
+	return s.arena.size()
+}
+
 // NewIterator returns a SkipList iterator. You must close the iterator.
 func (s *SkipList) NewIterator() *Iterator {
 	s.IncrRef()
 	return &Iterator{list: s}
 }
 
+// Iterator is a bidirectional iterator that can be directly used for range queries, bulk data processing
 type Iterator struct {
 	list *SkipList
 	n    *node
@@ -332,42 +358,118 @@ func (i *Iterator) Close() error {
 	return nil
 }
 
+// Valid returns true iff the iterator is positioned at a valid node.
+func (i *Iterator) Valid() bool {
+	return i.n != nil
+}
+
+// Key returns the key at the current node
+func (i *Iterator) Key() []byte {
+	return i.list.arena.getKey(i.n.keyOffset, i.n.keySize)
+}
+
+// Value returns the value at the current node
+func (i *Iterator) Value() kv.Value {
+	return i.list.arena.getVal(i.n.getValue())
+}
+
+// ValueUint64 returns the uint64 value of the current node
+func (i *Iterator) ValueUint64() uint64 {
+	return i.n.value.Load()
+}
+
+// Next moves to the next position.
+func (i *Iterator) Next() {
+	if !i.Valid() {
+		log.Fatalf("the current node is nil, can't move to next node")
+	}
+	i.n = i.list.getNext(i.n, 0)
+}
+
+// Prev moves to the previous position
+func (i *Iterator) Prev() {
+	if !i.Valid() {
+		log.Fatalf("the current node is nil, can't move to prev node")
+	}
+	i.n, _ = i.list.findNear(i.Key(), true, false)
+}
+
+// Seek moves to the first entry with a key >= target
+func (i *Iterator) Seek(target []byte) {
+	i.n, _ = i.list.findNear(target, false, true) // find >=
+}
+
+// SeekPrev moves to the first entry with a key <= target
+func (i *Iterator) SeekPrev(target []byte) {
+	i.n, _ = i.list.findNear(target, true, true) // find <=
+}
+
+// SeekToFirst seeks at the first entry in the list,
+// i.e., jumps to the first key in the SkipList, for sequential traversal.
+// If the list is not empty, the final state of the iterator is Valid().
+func (i *Iterator) SeekToFirst() {
+	i.n = i.list.getNext(i.list.head, 0)
+}
+
+// SeekToLast seeks at the last entry in the list,
+// i.e., jumps to the last key in the SkipList, for inverted traversal.
+// If the list is not empty, the final state of the iterator is Valid().
+func (i *Iterator) SeekToLast() {
+	i.n = i.list.findLast()
+}
+
+// UniIterator is a unidirectional memtable iterator that is a simple wrapper around Iterator.
 type UniIterator struct {
 	iter     *Iterator
 	reversed bool
 }
 
-func (u UniIterator) Next() {
-	//TODO implement me
-	panic("implement me")
+// NewUniIterator returns a UniIterator.
+func (s *SkipList) NewUniIterator(reversed bool) *UniIterator {
+	return &UniIterator{
+		iter:     s.NewIterator(),
+		reversed: reversed,
+	}
 }
 
-func (u UniIterator) Rewind() {
-	//TODO implement me
-	panic("implement me")
+// Next is unidirectional, so the value of reversed determines
+// whether to reverse traversal or not.
+func (u *UniIterator) Next() {
+	if !u.reversed {
+		u.iter.Next()
+	} else {
+		u.iter.Prev()
+	}
 }
 
-func (u UniIterator) Seek(key []byte) {
-	//TODO implement me
-	panic("implement me")
+func (u *UniIterator) Rewind() {
+	if !u.reversed {
+		u.iter.SeekToFirst()
+	} else {
+		u.iter.SeekToLast()
+	}
 }
 
-func (u UniIterator) Key() []byte {
-	//TODO implement me
-	panic("implement me")
+func (u *UniIterator) Seek(key []byte) {
+	if !u.reversed {
+		u.iter.Seek(key)
+	} else {
+		u.iter.SeekPrev(key)
+	}
 }
 
-func (u UniIterator) Value() kv.Value {
-	//TODO implement me
-	panic("implement me")
+func (u *UniIterator) Key() []byte {
+	return u.iter.Key()
 }
 
-func (u UniIterator) Valid() bool {
-	//TODO implement me
-	panic("implement me")
+func (u *UniIterator) Value() kv.Value {
+	return u.iter.Value()
 }
 
-func (u UniIterator) Close() error {
-	//TODO implement me
-	panic("implement me")
+func (u *UniIterator) Valid() bool {
+	return u.iter.Valid()
+}
+
+func (u *UniIterator) Close() error {
+	return u.iter.Close()
 }
