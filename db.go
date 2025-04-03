@@ -5,4 +5,6 @@ type DB struct {
 	imm []*memTable // add here only AFTER pushing to flushChan.
 
 	nextMemfd int // Initialized through openMemTables.
+
+	opt *option
 }

@@ -6,6 +6,8 @@ type option struct {
 	MemTableSize   int64  // MemTable size threshold (Flush if exceeded)
 	SyncWrites     bool   // Whether each write is immediately flushed to disk
 	ValueThreshold int64  // Threshold value, above which the value is written to ValueDir instead of Dir.
+	maxBatchCount  int64  // max entries in batch
+	maxBatchSize   int64  // max batch size in bytes
 }
 type Option func(*option)
 
